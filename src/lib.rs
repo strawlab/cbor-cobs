@@ -15,6 +15,8 @@ extern crate core as std;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+const SENTINEL: u8 = 0x00;
+
 #[derive(Debug)]
 #[cfg_attr(feature = "std", derive(thiserror::Error))]
 pub enum Error {
@@ -31,10 +33,6 @@ pub enum Error {
     Deserialization,
     #[cfg_attr(feature = "std", error("deserialize bad encoding"))]
     DeserializeBadEncoding,
-    // #[error("serde JSON error {0}")]
-    // SerdeJson(#[from] serde_json::Error),
-    // #[error("JSON representation contained newline")]
-    // NewlineInData,
 }
 
 // ------
@@ -48,8 +46,10 @@ pub fn from_bytes_cobs<'a, T>(s: &'a mut [u8]) -> Result<T>
 where
     T: Deserialize<'a>,
 {
+    debug_assert_eq!(crate::SENTINEL, 0x00); // otherwise use cobs::decode_in_place_with_sentinel
     let sz = cobs::decode_in_place(s).map_err(|_| Error::DeserializeBadEncoding)?;
-    from_bytes::<T>(&mut s[..sz])
+    let cbor_encoded = &mut s[..sz];
+    from_bytes::<T>(cbor_encoded)
 }
 
 /// Deserialize a message of type `T` from a byte slice. The unused portion (if any)
@@ -65,6 +65,10 @@ where
     Ok(t)
 }
 
+/// Serialize a `T` to the given slice.
+///
+/// When successful, this function returns the slice containing the serialized
+/// (but not COBS-encoded) message.
 pub fn to_slice<'a, 'b, T>(value: &'b T, buf: &'a mut [u8]) -> Result<&'a mut [u8]>
 where
     T: Serialize + ?Sized,
@@ -80,29 +84,25 @@ where
     Ok(&mut buf[..size])
 }
 
-/// Serialize a `T` to the given slice, with the resulting slice containing
-/// data in a serialized then COBS encoded format. The terminating sentinel
-/// `0x00` byte is included in the output buffer.
+/// Serialize a `T` to the given slice, with the resulting slice containing data
+/// in a serialized then COBS encoded format. The terminating sentinel byte
+/// (0x00) is included in the output buffer.
 ///
-/// When successful, this function returns the slice containing the
-/// serialized and encoded message.
+/// When successful, this function returns the slice containing the serialized
+/// and encoded message.
 pub fn to_slice_cobs<'a, 'b, T>(value: &'b T, buf: &'a mut [u8]) -> Result<&'a mut [u8]>
 where
     T: Serialize + ?Sized,
 {
-    let used = to_slice(value, buf)?;
-    let size = used.len();
-
-    let (used, future_use) = buf.split_at_mut(size);
+    // Encode to CBOR, filling first bytes of buf.
+    let nbytes = to_slice(value, buf)?.len();
+    let (cbor_encoded, future_use) = buf.split_at_mut(nbytes);
 
     // hmm, this is not very memory efficient. We simply use the rest of the
     // buffer given to us originally. Can COBS rewrite in place?
 
-    let mut encoder = cobs::CobsEncoder::new(&mut future_use[..]);
-    encoder.push(used).map_err(|_| Error::Cobs)?;
-    let final_size = encoder.finalize().map_err(|_| Error::Cobs)?;
+    let sz = cobs::encode_with_sentinel(cbor_encoded, &mut future_use[..], SENTINEL);
 
-    // include sentinel
-    future_use[final_size] = 0x00;
-    Ok(&mut future_use[..final_size + 1])
+    future_use[sz] = SENTINEL;
+    Ok(&mut future_use[..sz + 1])
 }

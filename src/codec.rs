@@ -65,10 +65,11 @@ where
 {
     type Error = Error;
     fn encode(&mut self, msg: S, final_buf: &mut BytesMut) -> Result<()> {
-        let cbor_buf = serde_cbor::to_vec(&msg)?;
-        let mut buf = cobs::encode_vec(&cbor_buf);
-        buf.push(0x00); // sentinel
-        final_buf.extend_from_slice(&buf);
+        let msg_size = std::mem::size_of::<S>();
+        let alloc_size = std::cmp::max(msg_size, 16) * 4; // guess
+        let mut buf = vec![0u8; alloc_size];
+        let encoded = crate::to_slice_cobs(&msg, &mut buf)?;
+        final_buf.extend_from_slice(&encoded);
         Ok(())
     }
 }

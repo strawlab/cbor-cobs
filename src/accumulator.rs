@@ -72,9 +72,9 @@ impl<const N: usize> CobsAccumulator<N> {
             return FeedResult::Consumed;
         }
 
-        let zero_pos = input.iter().position(|&i| i == 0);
+        let sentinel_pos = input.iter().position(|&i| i == crate::SENTINEL);
 
-        if let Some(n) = zero_pos {
+        if let Some(n) = sentinel_pos {
             // Yes! We have an end of message here.
             // Add one to include the zero in the "take" portion
             // of the buffer, rather than in "release".
